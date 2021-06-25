@@ -9,16 +9,7 @@ use ide_db::{
 };
 use itertools::Itertools;
 use stdx::format_to;
-use syntax::{
-    ast::{
-        self,
-        edit::{AstNodeEdit, IndentLevel},
-        AstNode,
-    },
-    ted,
-    SyntaxKind::{self, BLOCK_EXPR, BREAK_EXPR, COMMENT, PATH_EXPR, RETURN_EXPR},
-    SyntaxNode, SyntaxToken, TextRange, TextSize, TokenAtOffset, WalkEvent, T,
-};
+use syntax::{SyntaxKind::{self, BLOCK_EXPR, BREAK_EXPR, COMMENT, PATH_EXPR, RETURN_EXPR}, SyntaxNode, SyntaxToken, T, TextRange, TextSize, TokenAtOffset, WalkEvent, ast::{self, AstNode, edit::{AstNodeEdit, IndentLevel}}, ted};
 
 use crate::{
     assist_context::{AssistContext, Assists, TreeMutator},
@@ -634,7 +625,17 @@ fn extraction_target(node: &SyntaxNode, selection_range: TextRange) -> Option<Fu
 
 /// list local variables that are referenced in `body`
 fn vars_used_in_body(ctx: &AssistContext, body: &FunctionBody) -> Vec<Local> {
-    // FIXME: currently usages inside macros are not found
+    let vars_in_macro_call = body.descendants()
+        .filter_map(ast::MacroCall::cast)
+        .filter_map(|ast| ctx.sema.expand(&ast))
+        .flat_map(|ast| ast.descendants())
+        .filter_map(ast::NameRef::cast)
+        .filter_map(|name_ref| NameRefClass::classify(&ctx.sema, &name_ref))
+        .map(|name_kind| name_kind.referenced(ctx.db()))
+        .filter_map(|definition| match definition {
+            Definition::Local(local) => Some(local),
+            _ => None,
+        });
     body.descendants()
         .filter_map(ast::NameRef::cast)
         .filter_map(|name_ref| NameRefClass::classify(&ctx.sema, &name_ref))
@@ -648,6 +649,7 @@ fn vars_used_in_body(ctx: &AssistContext, body: &FunctionBody) -> Vec<Local> {
             Definition::Local(local) => Some(local),
             _ => None,
         })
+        .chain(vars_in_macro_call)
         .unique()
         .collect()
 }
@@ -3746,4 +3748,34 @@ async fn some_function() {
 "#,
         );
     }
+
+    #[test]
+    fn extract_with_macro_arg() {
+        check_assist(
+            extract_function,
+            r#"
+macro_rules! m {
+    ($val:expr) => { $val };
+}
+fn main() {
+    let bar = "bar";
+    $0m!(bar);$0
+}
+"#,
+            r#"
+macro_rules! m {
+    ($val:expr) => { $val };
+}
+fn main() {
+    let bar = "bar";
+    fun_name(bar);
+}
+
+fn $0fun_name(bar: &str) {
+    m!(bar);
+}
+"#,
+        );
+    }
+
 }
