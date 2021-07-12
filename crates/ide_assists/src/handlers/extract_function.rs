@@ -9,7 +9,9 @@ use ide_db::{
 };
 use itertools::Itertools;
 use stdx::format_to;
-use syntax::{SyntaxKind::{self, BLOCK_EXPR, BREAK_EXPR, COMMENT, PATH_EXPR, RETURN_EXPR}, SyntaxNode, SyntaxToken, T, TextRange, TextSize, TokenAtOffset, WalkEvent, ast::{self, AstNode, edit::{AstNodeEdit, IndentLevel}}, ted};
+use syntax::{
+    ast::{self, AstNode, edit::{AstNodeEdit, IndentLevel}},
+    SyntaxKind::{self, BLOCK_EXPR, BREAK_EXPR, COMMENT, PATH_EXPR, RETURN_EXPR}, SyntaxNode, SyntaxToken, T, TextRange, TextSize, TokenAtOffset, WalkEvent, ted};
 
 use crate::{
     assist_context::{AssistContext, Assists, TreeMutator},
@@ -62,7 +64,7 @@ pub(crate) fn extract_function(acc: &mut Assists, ctx: &AssistContext) -> Option
     let vars_used_in_body = vars_used_in_body(ctx, &body);
     let self_param = self_param_from_usages(ctx, &body, &vars_used_in_body);
 
-    let anchor = if self_param.is_some() { Anchor::Method } else { Anchor::Freestanding };
+                        let anchor = if self_param.is_some() { Anchor::Method } else { Anchor::Freestanding };
     let insert_after = scope_for_fn_insertion(&body, anchor)?;
     let module = ctx.sema.scope(&insert_after).module()?;
 
@@ -631,7 +633,12 @@ fn vars_used_in_body(ctx: &AssistContext, body: &FunctionBody) -> Vec<Local> {
         .flat_map(|ast| ast.descendants())
         .filter_map(ast::NameRef::cast)
         .filter_map(|name_ref| NameRefClass::classify(&ctx.sema, &name_ref))
-        .map(|name_kind| name_kind.referenced(ctx.db()))
+        .map(|name_kind| match name_kind {
+            NameRefClass::Definition(def) => def,
+            NameRefClass::FieldShorthand { local_ref, field_ref: _ } => {
+                Definition::Local(local_ref)
+            }
+        })
         .filter_map(|definition| match definition {
             Definition::Local(local) => Some(local),
             _ => None,
